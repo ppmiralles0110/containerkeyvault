@@ -210,6 +210,44 @@ def ready():
     return ("READY", 200)
 
 
+@app.route("/diag")
+def diag():
+    """Safe diagnostics endpoint for runtime verification.
+    Returns non-sensitive information useful to debug identity/config issues:
+    - presence and values of KEY_VAULT_URL, SECRET_NAME, AZURE_CLIENT_ID
+    - whether a token for Key Vault could be acquired and a small set of decoded claims
+    Does NOT return secret values or raw tokens.
+    """
+    result = {
+        "env": {
+            "KEY_VAULT_URL": os.environ.get("KEY_VAULT_URL"),
+            "SECRET_NAME": os.environ.get("SECRET_NAME"),
+            "AZURE_CLIENT_ID": os.environ.get("AZURE_CLIENT_ID")
+        },
+        "token_acquired": False,
+        "token_claims": None,
+        "token_error": None
+    }
+
+    try:
+        credential = DefaultAzureCredential()
+        scope = "https://vault.azure.net/.default"
+        access_token = credential.get_token(scope)
+        # Decode claims safely (no signature verification) and show only a few identifiers
+        try:
+            decoded = jwt.decode(access_token.token, options={"verify_signature": False})
+            claims_to_show = {k: decoded.get(k) for k in ("oid", "appid", "upn", "sub") if decoded.get(k) is not None}
+            result["token_acquired"] = True
+            result["token_claims"] = claims_to_show
+        except Exception as ex:
+            result["token_error"] = f"Failed to decode token: {ex}"
+
+    except Exception as ex:
+        result["token_error"] = str(ex)
+
+    return result, 200
+
+
 if __name__ == "__main__":
     # For local testing only; in container use a production WSGI server
     app.run(host="0.0.0.0", port=PORT)
