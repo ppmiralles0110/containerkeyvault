@@ -37,7 +37,7 @@ logger = logging.getLogger("container-keyvault-app")
 app = Flask(__name__)
 
 # Configuration - prefer environment variables
-KEY_VAULT_URL = os.environ.get("https://container-test-01-vault.vault.azure.net/")  # e.g., https://myvault.vault.azure.net/
+KEY_VAULT_URL = os.environ.get("KEY_VAULT_URL")  # e.g., https://myvault.vault.azure.net/
 SECRET_NAME = os.environ.get("SECRET_NAME", "aca-key-01")
 PORT = int(os.environ.get("PORT", "8080"))
 
