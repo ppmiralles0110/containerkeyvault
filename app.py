@@ -24,7 +24,7 @@ import time
 import base64
 import json
 
-from flask import Flask, render_template_string
+from flask import Flask, render_template
 from azure.identity import DefaultAzureCredential
 from azure.keyvault.secrets import SecretClient
 from azure.core.exceptions import AzureError
@@ -101,39 +101,51 @@ TEMPLATE = """
 
 @app.route("/")
 def index():
+    """Render the UI template with structured context for token claims and secret status.
+    The template will display a clear success/failure badge and token claim details.
+    """
     if not KEY_VAULT_URL:
-        return render_template_string(TEMPLATE, keyvault_url=None, secret_name=SECRET_NAME, success=False,
-                                      error_message="KEY_VAULT_URL not configured in environment", token_claims=None,
-                                      secret_len=0, azure_client_id=os.environ.get("AZURE_CLIENT_ID"))
+        context = {
+            "keyvault_url": None,
+            "secret_name": SECRET_NAME,
+            "success": False,
+            "error_message": "KEY_VAULT_URL not configured in environment",
+            "token_claims": None,
+            "secret_len": 0,
+            "identity_type": "none",
+            "azure_client_id": os.environ.get("AZURE_CLIENT_ID")
+        }
+        return render_template("index.html", **context)
 
     credential = DefaultAzureCredential()
     secret_client = SecretClient(vault_url=KEY_VAULT_URL, credential=credential)
 
-    # We'll attempt to acquire a token so we can inspect the token claims and prove which identity was used
+    # Acquire a token to inspect token claims (evidence of managed identity)
     token_claims = None
+    identity_type = "unknown"
     try:
-        # Acquire a token for Key Vault resource
         scope = "https://vault.azure.net/.default"
         access_token = credential.get_token(scope)
         token_string = access_token.token
+        decoded = jwt.decode(token_string, options={"verify_signature": False})
+        claims_to_show = {k: decoded.get(k) for k in ("aud", "iss", "exp", "nbf", "iat", "oid", "appid", "upn") if decoded.get(k) is not None}
+        token_claims = json.dumps(claims_to_show, indent=2)
 
-        # Decode JWT payload without verifying signature to inspect claims like 'oid' or 'appid'
-        try:
-            decoded = jwt.decode(token_string, options={"verify_signature": False})
-            # Keep only a subset of claims for tidy output
-            claims_to_show = {k: decoded.get(k) for k in ("aud", "iss", "exp", "nbf", "iat", "oid", "appid", "upn") if decoded.get(k) is not None}
-            token_claims = json.dumps(claims_to_show, indent=2)
-        except Exception as ex:
-            logger.warning("Failed to decode token: %s", ex)
-            token_claims = f"Failed to decode token: {ex}"
+        # heuristics to determine identity type
+        if os.environ.get("AZURE_CLIENT_ID"):
+            identity_type = "user-assigned"
+        elif claims_to_show.get("oid") and not claims_to_show.get("appid"):
+            identity_type = "system-assigned"
+        else:
+            identity_type = "managed-identity (unknown type)"
 
     except Exception as ex:
-        logger.exception("Failed to acquire token using DefaultAzureCredential: %s", ex)
-        return render_template_string(TEMPLATE, keyvault_url=KEY_VAULT_URL, secret_name=SECRET_NAME, success=False,
-                                      error_message=f"Failed to get token: {ex}", token_claims=None,
-                                      secret_len=0, azure_client_id=os.environ.get("AZURE_CLIENT_ID"))
+        logger.exception("Failed to acquire or decode token: %s", ex)
+        return render_template("index.html", keyvault_url=KEY_VAULT_URL, secret_name=SECRET_NAME, success=False,
+                               error_message=f"Failed to get token: {ex}", token_claims=None, secret_len=0,
+                               identity_type="none", azure_client_id=os.environ.get("AZURE_CLIENT_ID"))
 
-    # Attempt to fetch the secret with a simple retry/backoff
+    # Attempt to fetch the secret
     max_retries = 3
     backoff_seconds = 1
     last_error = None
@@ -145,10 +157,18 @@ def index():
             secret = secret_client.get_secret(SECRET_NAME)
             secret_value = secret.value
             secret_len = len(secret_value) if secret_value is not None else 0
-            logger.info("Successfully retrieved secret (length=%d)", secret_len)
-            return render_template_string(TEMPLATE, keyvault_url=KEY_VAULT_URL, secret_name=SECRET_NAME, success=True,
-                                          error_message=None, token_claims=token_claims, secret_len=secret_len,
-                                          azure_client_id=os.environ.get("AZURE_CLIENT_ID"))
+            context = {
+                "keyvault_url": KEY_VAULT_URL,
+                "secret_name": SECRET_NAME,
+                "success": True,
+                "message": "Secret successfully retrieved via Managed Identity",
+                "error_message": None,
+                "token_claims": token_claims,
+                "secret_len": secret_len,
+                "identity_type": identity_type,
+                "azure_client_id": os.environ.get("AZURE_CLIENT_ID")
+            }
+            return render_template("index.html", **context)
 
         except AzureError as ae:
             last_error = str(ae)
@@ -157,15 +177,37 @@ def index():
             last_error = str(ex)
             logger.exception("Unexpected error on attempt %d: %s", attempt, ex)
 
-        # Backoff
         time.sleep(backoff_seconds)
         backoff_seconds *= 2
 
-    # If we reach here, all retries failed
-    error_message = last_error or "Unknown error"
-    return render_template_string(TEMPLATE, keyvault_url=KEY_VAULT_URL, secret_name=SECRET_NAME, success=False,
-                                  error_message=error_message, token_claims=token_claims, secret_len=secret_len,
-                                  azure_client_id=os.environ.get("AZURE_CLIENT_ID"))
+    context = {
+        "keyvault_url": KEY_VAULT_URL,
+        "secret_name": SECRET_NAME,
+        "success": False,
+        "message": "Failed to retrieve secret",
+        "error_message": last_error or "Unknown error",
+        "token_claims": token_claims,
+        "secret_len": secret_len,
+        "identity_type": identity_type,
+        "azure_client_id": os.environ.get("AZURE_CLIENT_ID")
+    }
+    return render_template("index.html", **context)
+
+
+@app.route("/healthz")
+def healthz():
+    """Simple liveness probe endpoint.
+    Returns 200 immediately so platform probes do not trigger Key Vault calls.
+    """
+    return ("OK", 200)
+
+
+@app.route("/ready")
+def ready():
+    """Readiness probe endpoint. Should return 200 when app is ready toserve traffic.
+    Keep this minimal; do not perform external network calls here.
+    """
+    return ("READY", 200)
 
 
 if __name__ == "__main__":

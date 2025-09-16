@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Container App Key Vault UI</title>
+    <style>
+      :root { --success: #16a34a; --danger: #dc2626; --muted: #6b7280; }
+      body { font-family: Inter, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial; margin: 2rem; color: #111827; }
+      .wrap { max-width: 900px; margin: 0 auto; }
+      .card { background: #fff; border-radius: 8px; padding: 1.25rem; box-shadow: 0 1px 2px rgba(0,0,0,0.04); margin-bottom: 1rem; }
+      h1 { font-size: 1.5rem; margin-bottom: 0.25rem; }
+      .status { display:flex; gap:1rem; align-items:center; }
+      .badge { padding: 0.35rem 0.6rem; border-radius: 9999px; color:white; font-weight:600; }
+      .ok { background: var(--success); }
+      .fail { background: var(--danger); }
+      pre { background:#f8fafc; padding:1rem; border-radius:6px; overflow:auto; }
+      .muted { color: var(--muted); }
+      .row { display:flex; gap:1rem; }
+      .col { flex:1; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="card">
+        <h1>Container App → Key Vault status</h1>
+        <p class="muted">This page demonstrates Managed Identity authentication and secret retrieval from Azure Key Vault. Secret values are not displayed.</p>
+      </div>
+
+      <div class="card">
+        <h2>Status</h2>
+        <div class="status">
+          <div>
+            <div class="badge {% if success %}ok{% else %}fail{% endif %}">{{ 'SUCCESS' if success else 'FAILED' }}</div>
+          </div>
+          <div>
+            <div><strong>{{ message }}</strong></div>
+            <div class="muted">Secret name: {{ secret_name }}</div>
+            <div class="muted">Key Vault: {{ keyvault_url }}</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card row">
+        <div class="col">
+          <h3>Managed identity</h3>
+          <p class="muted">Identity type: <strong>{{ identity_type }}</strong></p>
+          <p class="muted">Client ID: <strong>{{ azure_client_id or 'not-provided' }}</strong></p>
+          <h4>Token claims</h4>
+          {% if token_claims %}
+            <pre>{{ token_claims }}</pre>
+          {% else %}
+            <p class="muted">No token claims available.</p>
+          {% endif %}
+        </div>
+        <div class="col">
+          <h3>Secret details</h3>
+          {% if success %}
+            <p class="muted">Fetched secret successfully.</p>
+            <p><strong>Secret length:</strong> {{ secret_len }} chars</p>
+          {% else %}
+            <p class="muted">Secret fetch failed.</p>
+            <pre>{{ error_message }}</pre>
+          {% endif %}
+
+          <h4>Tips</h4>
+          <ul class="muted">
+            <li>Ensure the Container App has a managed identity assigned.</li>
+            <li>Grant the identity Key Vault Secrets access via RBAC or access policy.</li>
+            <li>Set AZURE_CLIENT_ID to the user-assigned identity client id if using user-assigned identity.</li>
+          </ul>
+        </div>
+      </div>
+
+    </div>
+  </body>
+</html>
